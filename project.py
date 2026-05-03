@@ -412,10 +412,9 @@ df = engineer_features(df_raw)
 best_tilt_p, _, tilts_p, preds_p = find_optimal_tilt(model_power, radiation, loss)
 best_tilt_e, _, tilts_e, preds_e = find_optimal_tilt(model_eff,   radiation, loss)
 
-m1, m2, m3, m4, m5 = st.columns(5)
+m1, m2,m4, m5 = st.columns(4)
 m1.metric("Dataset Rows",       f"{len(df_raw):,}")
-m2.metric("Power Model R²",     f"{r2_p:.3f}")
-m3.metric("Efficiency Model R²",f"{r2_e:.3f}")
+m2.metric(" Model R²",     f"{r2_p:.3f}")
 m4.metric("Optimal Tilt (Power)",    f"{best_tilt_p}°")
 m5.metric("Optimal Tilt (Efficiency)",f"{best_tilt_e}°")
 
