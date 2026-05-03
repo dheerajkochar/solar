@@ -215,7 +215,7 @@ MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun",
 @st.cache_data(show_spinner=False)
 def load_dataset(path: str) -> pd.DataFrame | None:
     if os.path.exists(path):
-        return pd.read_csv(path)
+        return pd.read_csv("solar_data.csv")
     return None
 
 
