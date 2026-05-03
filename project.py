@@ -215,7 +215,7 @@ MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun",
 @st.cache_data(show_spinner=False)
 def load_dataset(path: str) -> pd.DataFrame | None:
     if os.path.exists(path):
-        return pd.read_csv("solar_data.csv")
+        return pd.read_csv(path)
     return None
 
 
@@ -255,7 +255,7 @@ def fetch_from_api(api_key: str, lat: float, lon: float) -> pd.DataFrame:
                 time.sleep(0.4)
 
     prog.empty()
-    df = pd.DataFrame(records)
+    df = pd.DataFrame("solar_data.csv")
     df.to_csv(DATASET_PATH, index=False)
     return df
 
