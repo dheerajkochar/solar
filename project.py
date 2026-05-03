@@ -215,7 +215,7 @@ MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun",
 @st.cache_data(show_spinner=False)
 def load_dataset(path: str) -> pd.DataFrame | None:
     if os.path.exists(path):
-        return pd.read_csv("solar_data.csv")
+        return pd.read_csv(path)
     return None
 
 
@@ -267,7 +267,10 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     return df.dropna(subset=["efficiency"])
 
 
-FEATURES = ["tilt_angle", "system_loss", "solar_radiation_kwh_m2_day", "month"]
+# month intentionally excluded — it is correlated with radiation in training data,
+# causing the model to learn month "personality" separately from radiation.
+# Radiation alone encodes seasonality: same radiation → same prediction (physically honest).
+FEATURES = ["tilt_angle", "system_loss", "solar_radiation_kwh_m2_day"]
 
 @st.cache_resource(show_spinner=False)
 def train_models(df_hash: int, _df: pd.DataFrame):
@@ -289,11 +292,10 @@ def train_models(df_hash: int, _df: pd.DataFrame):
     return mp, me, rmse_p, r2_p, rmse_e, r2_e
 
 
-def find_optimal_tilt(model, radiation, loss, month, tilt_range=range(10, 45)):
-    best_val, best_tilt = -np.inf, tilt_range.start
+def find_optimal_tilt(model, radiation, loss, tilt_range=range(10, 45)):
     rows = pd.DataFrame([
         {"tilt_angle": t, "system_loss": loss,
-         "solar_radiation_kwh_m2_day": radiation, "month": month}
+         "solar_radiation_kwh_m2_day": radiation}
         for t in tilt_range
     ])
     preds = model.predict(rows[FEATURES])
@@ -340,14 +342,11 @@ with st.sidebar:
 
     st.divider()
     st.markdown('<p class="section-header">Scenario Parameters</p>', unsafe_allow_html=True)
+    st.caption("Month excluded from model — radiation alone encodes seasonality.")
 
     radiation = st.slider("Solar Radiation (kWh/m²/day)", 3.0, 9.0, 6.5, 0.1)
     loss      = st.slider("System Loss (%)",              5,   25,  10,  1)
     capacity  = st.select_slider("Capacity (kW)", options=[1, 2, 3, 4, 5], value=3)
-    month     = st.select_slider(
-        "Month", options=list(range(1, 13)),
-        format_func=lambda m: MONTH_NAMES[m-1], value=5,
-    )
 
     st.divider()
     fetch_btn = st.button("🔄 Fetch Fresh Data from API", use_container_width=True)
@@ -357,7 +356,7 @@ with st.sidebar:
 # DATA LOADING
 # ============================================================
 
-df_raw = load_dataset(DATASET_PATH)
+df_raw = load_dataset("solar_data.csv")
 
 if fetch_btn:
     if not api_key:
@@ -410,8 +409,8 @@ df = engineer_features(df_raw)
 # TOP METRICS ROW
 # ============================================================
 
-_, best_tilt_p, tilts_p, preds_p = find_optimal_tilt(model_power, radiation, loss, month)
-_, best_tilt_e, tilts_e, preds_e = find_optimal_tilt(model_eff,   radiation, loss, month)
+best_tilt_p, _, tilts_p, preds_p = find_optimal_tilt(model_power, radiation, loss)
+best_tilt_e, _, tilts_e, preds_e = find_optimal_tilt(model_eff,   radiation, loss)
 
 m1, m2, m3, m4, m5 = st.columns(5)
 m1.metric("Dataset Rows",       f"{len(df_raw):,}")
@@ -495,9 +494,9 @@ with tab1:
                     unsafe_allow_html=True)
 
         cfg = pd.DataFrame({
-            "Parameter":  ["Tilt Angle", "System Loss", "Radiation", "Month", "Capacity"],
+            "Parameter":  ["Tilt Angle", "System Loss", "Radiation", "Capacity"],
             "Value":      [f"{best_tilt_e}°", f"{loss}%",
-                           f"{radiation} kWh/m²/day", MONTH_NAMES[month-1], f"{capacity} kW"],
+                           f"{radiation} kWh/m²/day", f"{capacity} kW"],
         })
         st.dataframe(cfg, hide_index=True, use_container_width=True)
 
@@ -521,8 +520,9 @@ with tab2:
             labels={"month": "Month", "normalized_power": "W/kW", "tilt_angle": "Tilt (°)"},
             color_discrete_sequence=px.colors.sequential.YlOrBr,
         )
-        fig2.update_layout(**PLOTLY_LAYOUT, height=340,
-                           xaxis=dict(tickvals=list(range(1,13)), ticktext=MONTH_NAMES))
+        fig2.update_layout(**PLOTLY_LAYOUT, height=340)
+        fig2.update_xaxes(tickvals=list(range(1,13)), ticktext=MONTH_NAMES, **AXIS_STYLE)
+        fig2.update_yaxes(**AXIS_STYLE)
         st.plotly_chart(fig2, use_container_width=True)
 
     with c2:
@@ -621,7 +621,7 @@ with tab3:
     for t in tilt_grid:
         for l in loss_grid:
             row = {"tilt_angle": t, "system_loss": l,
-                   "solar_radiation_kwh_m2_day": radiation, "month": month}
+                   "solar_radiation_kwh_m2_day": radiation}
             rows.append(row)
 
     grid_df  = pd.DataFrame(rows)
@@ -676,8 +676,8 @@ with tab4:
     if st.button("▶ Run Scenario Analysis", use_container_width=True):
         results = []
         for sc in scenario_inputs:
-            tilt_p, val_p, _, _ = find_optimal_tilt(model_power, sc["radiation"], sc["loss"], sc["month"])
-            tilt_e, val_e, _, _ = find_optimal_tilt(model_eff,   sc["radiation"], sc["loss"], sc["month"])
+            tilt_p, val_p, _, _ = find_optimal_tilt(model_power, sc["radiation"], sc["loss"])
+            tilt_e, val_e, _, _ = find_optimal_tilt(model_eff,   sc["radiation"], sc["loss"])
             results.append({
                 "Scenario":       sc["label"],
                 "Month":          MONTH_NAMES[sc["month"]-1],
@@ -688,13 +688,19 @@ with tab4:
                 "Pred. Power (W/kW)":   round(val_p, 2),
                 "Pred. Efficiency":     round(val_e, 4),
             })
+        st.session_state["scenario_results"]  = results
+        st.session_state["scenario_inputs_ss"] = scenario_inputs
 
+    if "scenario_results" in st.session_state:
+        results       = st.session_state["scenario_results"]
+        _sc_inputs    = st.session_state.get("scenario_inputs_ss", scenario_inputs)
         res_df = pd.DataFrame(results)
         st.dataframe(res_df, use_container_width=True, hide_index=True)
 
         # Bar chart comparison
         fig8 = make_subplots(rows=1, cols=2,
-                             subplot_titles=["Optimal Tilt Angle (°)", "Predicted Efficiency"])
+                             subplot_titles=["Optimal Tilt Angle (°)", "Predicted Efficiency"],
+                             horizontal_spacing=0.12)
         colors = ["#fbbf24", "#34d399", "#60a5fa", "#f472b6", "#a78bfa"]
 
         for i, row in res_df.iterrows():
@@ -702,6 +708,7 @@ with tab4:
                 name=row["Scenario"], x=[row["Scenario"]],
                 y=[row["Optimal Tilt (Eff.)"]],
                 marker_color=colors[i % len(colors)],
+                showlegend=False,
             ), row=1, col=1)
             fig8.add_trace(go.Bar(
                 name=row["Scenario"], x=[row["Scenario"]],
@@ -722,7 +729,7 @@ with tab4:
         # Recommendations per scenario
         st.markdown('<p class="section-header">Per-Scenario Recommendations</p>',
                     unsafe_allow_html=True)
-        for i, (sc, row) in enumerate(zip(scenario_inputs, results)):
+        for i, (sc, row) in enumerate(zip(_sc_inputs, results)):
             with st.expander(f"📌 {row['Scenario']}"):
                 recs = get_recommendations(sc["radiation"], sc["loss"],
                                            row["Optimal Tilt (Eff.)"])
