@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+# FIX #8: Removed unused 'make_subplots' import
 import streamlit as st
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, r2_score
@@ -189,10 +189,11 @@ h1, h2, h3 {
 # ============================================================
 
 PVWATTS_URL     = "https://developer.nrel.gov/api/pvwatts/v8.json"
-DATASET_PATH    = "solar_dataset.csv"
+DATASET_PATH    = "solar_data.csv"      # Single source of truth for filename
 TILT_VALUES     = [10, 15, 20, 25, 30, 35, 40]
 LOSS_VALUES     = [8, 10, 12, 14, 16, 18]
-CAPACITY_VALUES = [1, 2, 3]
+# FIX #2: CAPACITY_VALUES now matches sidebar slider options exactly
+CAPACITY_VALUES = [1, 2, 3, 4, 5]
 
 PLOTLY_LAYOUT = dict(
     paper_bgcolor="rgba(0,0,0,0)",
@@ -263,7 +264,9 @@ def fetch_from_api(api_key: str, lat: float, lon: float) -> pd.DataFrame:
 def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["normalized_power"] = df["power_output_w"] / df["capacity_kw"]
-    df["efficiency"]       = df["power_output_w"] / df["solar_radiation_kwh_m2_day"].replace(0, np.nan)
+    # FIX #6: Use clip(lower=0.1) instead of replace(0, nan) to handle near-zero
+    # values that would otherwise produce extreme efficiency outliers
+    df["efficiency"] = df["power_output_w"] / df["solar_radiation_kwh_m2_day"].clip(lower=0.1)
     return df.dropna(subset=["efficiency"])
 
 
@@ -292,15 +295,19 @@ def train_models(df_hash: int, _df: pd.DataFrame):
     return mp, me, rmse_p, r2_p, rmse_e, r2_e
 
 
-def find_optimal_tilt(model, radiation, loss, tilt_range=range(10, 45)):
+# FIX #7: Use TILT_VALUES (training distribution) instead of range(10,45)
+# to avoid predictions on tilt angles the model was never trained on
+def find_optimal_tilt(model, radiation, loss, tilt_range=None):
+    if tilt_range is None:
+        tilt_range = TILT_VALUES
     rows = pd.DataFrame([
         {"tilt_angle": t, "system_loss": loss,
          "solar_radiation_kwh_m2_day": radiation}
         for t in tilt_range
     ])
     preds = model.predict(rows[FEATURES])
-    idx   = np.argmax(preds)
-    return list(tilt_range)[idx], preds[idx], list(tilt_range), preds.tolist()
+    idx   = int(np.argmax(preds))
+    return tilt_range[idx], preds[idx], tilt_range, preds.tolist()
 
 
 def get_recommendations(radiation, loss, optimal_tilt):
@@ -346,7 +353,8 @@ with st.sidebar:
 
     radiation = st.slider("Solar Radiation (kWh/m²/day)", 3.0, 9.0, 6.5, 0.1)
     loss      = st.slider("System Loss (%)",              5,   25,  10,  1)
-    capacity  = st.select_slider("Capacity (kW)", options=[1, 2, 3, 4, 5], value=3)
+    # FIX #2: Capacity options now match CAPACITY_VALUES = [1,2,3,4,5]
+    capacity  = st.select_slider("Capacity (kW)", options=CAPACITY_VALUES, value=3)
 
     st.divider()
     fetch_btn = st.button("🔄 Fetch Fresh Data from API", use_container_width=True)
@@ -356,16 +364,21 @@ with st.sidebar:
 # DATA LOADING
 # ============================================================
 
-df_raw = load_dataset("solar_data.csv")
+# FIX #1 & #4: Use DATASET_PATH constant everywhere — was "solar_data.csv" (wrong name)
+df_raw = load_dataset(DATASET_PATH)
 
 if fetch_btn:
     if not api_key:
         st.sidebar.error("Please enter your NREL API key first.")
     else:
+        # Invalidate old cached data before fetching fresh
+        load_dataset.clear()
         with st.spinner("Calling PVWatts API …"):
             df_raw = fetch_from_api(api_key, lat, lon)
         st.sidebar.success(f"✓ Fetched {len(df_raw):,} rows")
-        st.cache_resource.clear()
+        # FIX #5: Only clear the model cache, not ALL resources globally.
+        # The new df_hash derived from fresh data will naturally trigger a retrain,
+        # so no manual cache clear is needed here at all.
 
 # ============================================================
 # HERO HEADER
@@ -400,7 +413,9 @@ if df_raw is None or df_raw.empty:
 # ============================================================
 
 with st.spinner("Training ML models …"):
-    df_hash = hash(str(df_raw.shape) + str(df_raw.columns.tolist()))
+    # FIX #3: Use pd.util.hash_pandas_object for a content-aware cache key
+    # instead of shape+columns which is the same for different data
+    df_hash = int(pd.util.hash_pandas_object(df_raw).sum())
     model_power, model_eff, rmse_p, r2_p, rmse_e, r2_e = train_models(df_hash, df_raw)
 
 df = engineer_features(df_raw)
@@ -412,11 +427,12 @@ df = engineer_features(df_raw)
 best_tilt_p, _, tilts_p, preds_p = find_optimal_tilt(model_power, radiation, loss)
 best_tilt_e, _, tilts_e, preds_e = find_optimal_tilt(model_eff,   radiation, loss)
 
-m1, m2,m4, m5 = st.columns(4)
-m1.metric("Dataset Rows",       f"{len(df_raw):,}")
-m2.metric(" Model R²",     f"{r2_p:.3f}")
-m4.metric("Optimal Tilt (Power)",    f"{best_tilt_p}°")
-m5.metric("Optimal Tilt (Efficiency)",f"{best_tilt_e}°")
+# FIX #10: Renamed m4->m3 and m5->m4 to remove the confusing gap in variable names
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Dataset Rows",              f"{len(df_raw):,}")
+m2.metric("Model R²",                  f"{r2_p:.3f}")
+m3.metric("Optimal Tilt (Power)",      f"{best_tilt_p}°")
+m4.metric("Optimal Tilt (Efficiency)", f"{best_tilt_e}°")
 
 # ============================================================
 # TABS
@@ -425,8 +441,6 @@ m5.metric("Optimal Tilt (Efficiency)",f"{best_tilt_e}°")
 tab1, tab2 = st.tabs([
     "🎯  Tilt Optimizer",
     "📊  Data Explorer",
-    
-   
 ])
 
 
@@ -511,18 +525,24 @@ with tab2:
         st.markdown('<p class="section-header">Monthly Power Output by Tilt</p>',
                     unsafe_allow_html=True)
         df_cap = df[df["capacity_kw"] == capacity].copy()
-        df_pivot = df_cap.groupby(["month", "tilt_angle"])["normalized_power"].mean().reset_index()
 
-        fig2 = px.line(
-            df_pivot, x="month", y="normalized_power",
-            color="tilt_angle",
-            labels={"month": "Month", "normalized_power": "W/kW", "tilt_angle": "Tilt (°)"},
-            color_discrete_sequence=px.colors.sequential.YlOrBr,
-        )
-        fig2.update_layout(**PLOTLY_LAYOUT, height=340)
-        fig2.update_xaxes(tickvals=list(range(1,13)), ticktext=MONTH_NAMES, **AXIS_STYLE)
-        fig2.update_yaxes(**AXIS_STYLE)
-        st.plotly_chart(fig2, use_container_width=True)
+        # FIX #2 guard: show a clear warning if no rows match (shouldn't happen now
+        # that slider options == CAPACITY_VALUES, but kept as a safety net)
+        if df_cap.empty:
+            st.warning(f"No data available for {capacity} kW capacity. Try fetching fresh data.")
+        else:
+            df_pivot = df_cap.groupby(["month", "tilt_angle"])["normalized_power"].mean().reset_index()
+
+            fig2 = px.line(
+                df_pivot, x="month", y="normalized_power",
+                color="tilt_angle",
+                labels={"month": "Month", "normalized_power": "Normalised Power (W/kW)", "tilt_angle": "Tilt (°)"},
+                color_discrete_sequence=px.colors.sequential.YlOrBr,
+            )
+            fig2.update_layout(**PLOTLY_LAYOUT, height=340)
+            fig2.update_xaxes(tickvals=list(range(1,13)), ticktext=MONTH_NAMES, **AXIS_STYLE)
+            fig2.update_yaxes(**AXIS_STYLE)
+            st.plotly_chart(fig2, use_container_width=True)
 
     with c2:
         st.markdown('<p class="section-header">Power vs Solar Radiation (scatter)</p>',
@@ -559,11 +579,6 @@ with tab2:
     with st.expander("📋 Raw Dataset Preview"):
         st.dataframe(df_raw.head(200), use_container_width=True)
         st.caption(f"Showing 200 of {len(df_raw):,} rows")
-
-
-# ─────────────────────────────────────────────────────────────
-# TAB 3 — MODEL INSIGHTS
-# ─────────────────────────────────────────────────────────────
 
 
 # ============================================================
