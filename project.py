@@ -344,8 +344,8 @@ with st.sidebar:
 
     st.markdown("**Location**")
     col_lat, col_lon = st.columns(2)
-    lat = col_lat.number_input("Latitude",  value=21.15, format="%.4f")
-    lon = col_lon.number_input("Longitude", value=75.72, format="%.4f")
+    lat = col_lat.number_input("Latitude",  value=21.16, format="%.4f")
+    lon = col_lon.number_input("Longitude", value=72.46, format="%.4f")
 
     st.divider()
     st.markdown('<p class="section-header">Scenario Parameters</p>', unsafe_allow_html=True)
